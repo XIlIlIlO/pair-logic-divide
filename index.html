@@ -40,7 +40,7 @@
 
 <div class="container">
     <h1>엑셀 로직 생성기</h1>
-    <p>L그룹과 S그룹 엑셀 파일들을 업로드하여 로직을 생성하고 분할 다운로드합니다.</p>
+    <p>L그룹과 S그룹 엑셀 파일들을 업로드하여 로직을 생성합니다. (파일 내 코인 중복 방지 적용)</p>
 
     <div class="section">
         <h2>1. 파일 업로드</h2>
@@ -91,7 +91,7 @@
         <hr>
         <div class="input-grid">
             <div class="input-group">
-                <label for="split-count">파일 분할 개수 (행 단위)</label>
+                <label for="split-count">파일 분할 최대 개수 (행 단위)</label>
                 <input type="number" id="split-count" value="40" min="1">
             </div>
             <div class="input-group">
@@ -99,6 +99,7 @@
                 <input type="text" id="file-name" value="Result">
             </div>
         </div>
+        <p style="font-size: 0.9em; color: #666;">* 같은 파일 내에 동일 코인(L 또는 S)이 중복되지 않도록 분할하므로, 설정한 개수보다 적게 담길 수 있습니다.</p>
         <div style="margin-top: 20px; text-align: center;">
             <button onclick="processFiles()">데이터 처리 및 결과 생성</button>
         </div>
@@ -120,7 +121,7 @@
 <script>
     let lData = [];
     let sData = [];
-    let generatedRows = []; // 최종 생성된 모든 행 데이터
+    let allCombinations = []; // { lName, sName, rowData } 형태의 객체 리스트
     
     // 파일 입력 이벤트 리스너
     document.getElementById('files-l').addEventListener('change', (e) => updateFileList(e.target, 'list-l'));
@@ -170,11 +171,11 @@
                 return;
             }
 
-            // 3. 조합 로직 생성
-            generateLogicRows();
+            // 3. 조합 로직 데이터 생성
+            prepareCombinations();
 
             document.getElementById('result-summary').innerHTML = 
-                `<strong>생성 결과:</strong> 총 ${generatedRows.length}개의 조합 로직 생성됨. ` +
+                `<strong>생성 결과:</strong> 총 ${allCombinations.length}개의 조합 로직 준비됨. ` +
                 `(L: ${lData.length}개 × S: ${sData.length}개)`;
             document.getElementById('download-section').style.display = 'block';
             log("처리 완료! 다운로드 버튼을 이용하세요.");
@@ -187,16 +188,15 @@
     }
 
     async function parseAndMergeFiles(fileList, type) {
-        const mergedData = {}; // { "GroupName": { profit: 0, count: 0, rawName: "" } }
+        const mergedData = {}; 
 
         for (let file of fileList) {
             log(`${type} 파일 읽는 중: ${file.name}`);
             const data = await readExcelFile(file);
             
-            // 헤더 행 찾기 ('Group Name'이 있는 행)
+            // 헤더 행 찾기
             let headerRowIndex = -1;
             for(let i=0; i<Math.min(20, data.length); i++) {
-                // 첫번째 컬럼 혹은 다른 컬럼에서 Group Name 확인
                 const rowStr = JSON.stringify(data[i]);
                 if (rowStr.includes("Group Name")) {
                     headerRowIndex = i;
@@ -209,13 +209,10 @@
                 continue;
             }
 
-            // 컬럼 인덱스 찾기
             const headerRow = data[headerRowIndex];
             let nameIdx = -1;
             let profitIdx = -1;
 
-            // 헤더 배열을 순회하며 인덱스 찾기
-            // 보통 headerRow는 배열이거나 객체일 수 있음 (SheetJS 옵션에 따라 다름, 여기선 header:1로 읽어 배열임)
             headerRow.forEach((cell, idx) => {
                 if (!cell) return;
                 const c = cell.toString().trim();
@@ -224,11 +221,9 @@
             });
 
             if (nameIdx === -1 || profitIdx === -1) {
-                log(`[주의] ${file.name}에서 필요한 컬럼(Group Name, 순이익)을 찾을 수 없습니다.`);
                 continue;
             }
 
-            // 데이터 집계
             for (let i = headerRowIndex + 1; i < data.length; i++) {
                 const row = data[i];
                 if (!row || row.length <= nameIdx) continue;
@@ -256,7 +251,6 @@
                 const workbook = XLSX.read(data, { type: 'array' });
                 const firstSheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[firstSheetName];
-                // 2차원 배열로 변환
                 const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
                 resolve(json);
             };
@@ -272,13 +266,12 @@
                 list.push(dataMap[key]);
             }
         }
-        // 순이익 내림차순 정렬
         list.sort((a, b) => b.profit - a.profit);
         return list;
     }
 
-    function generateLogicRows() {
-        generatedRows = [];
+    function prepareCombinations() {
+        allCombinations = [];
         const valB = document.getElementById('val-b').value;
         const valC = document.getElementById('val-c').value;
         const valD = document.getElementById('val-d').value;
@@ -286,28 +279,16 @@
         const valF = document.getElementById('val-f').value;
         const valH = document.getElementById('val-h').value;
 
-        // 헤더
-        const header = ["GroupName", "Start", "Profit", "Loss", "Restart", "Leverage", "Symbols", "DCA", "PRM"];
-        
-        // 데이터 생성
         for (let lItem of lData) {
             for (let sItem of sData) {
-                const lName = lItem.rawName; // e.g., "XRP+"
-                const sName = sItem.rawName; // e.g., "ADA-"
+                const lName = lItem.rawName; 
+                const sName = sItem.rawName; 
                 
-                // A열: L코인명+ S코인명- (공백으로 연결)
                 const groupNameCol = `${lName} ${sName}`;
-
-                // G열 심볼 추출: 접미사(+, -) 제거
-                // 보통 L그룹은 +, S그룹은 - 로 끝나므로 마지막 글자 제거 시도
                 const lSymbolRaw = lName.replace(/[+\-]$/, "");
                 const sSymbolRaw = sName.replace(/[+\-]$/, "");
-                
-                // G열 포맷: "COINUSDT,L\nCOINUSDT,S"
                 const symbolsCol = `${lSymbolRaw}USDT,L\n${sSymbolRaw}USDT,S`;
 
-                // 행 데이터 구성
-                // I열(PRM)은 데이터 행에는 없음 (샘플 기준)
                 const row = [
                     groupNameCol, // A
                     valB,         // B
@@ -317,9 +298,15 @@
                     valF,         // F
                     symbolsCol,   // G
                     valH,         // H
-                    null          // I (데이터 없음)
+                    null          // I
                 ];
-                generatedRows.push(row);
+                
+                // 중복 체크를 위해 원본 이름 정보도 함께 저장
+                allCombinations.push({
+                    lName: lName,
+                    sName: sName,
+                    rowData: row
+                });
             }
         }
     }
@@ -343,42 +330,71 @@
     }
 
     function downloadZippedResults() {
-        if (generatedRows.length === 0) {
+        if (allCombinations.length === 0) {
             alert("생성된 로직 데이터가 없습니다.");
             return;
         }
 
-        const splitCount = parseInt(document.getElementById('split-count').value) || 40;
+        const maxRows = parseInt(document.getElementById('split-count').value) || 40;
         const baseName = document.getElementById('file-name').value || "Result";
         const zip = new JSZip();
+
+        log(`중복 방지 분할 작업 시작 (최대 ${maxRows}행/파일)...`);
+
+        // 파일 버킷 리스트 생성
+        // 각 버킷: { rows: [], usedL: Set(), usedS: Set() }
+        let buckets = [];
+
+        // First Fit with Constraints 알고리즘
+        for (let item of allCombinations) {
+            let placed = false;
+            
+            // 기존 버킷 중 넣을 수 있는 곳 찾기
+            for (let bucket of buckets) {
+                // 1. 용량 체크
+                if (bucket.rows.length >= maxRows) continue;
+                
+                // 2. 중복 체크 (해당 파일에 이미 같은 L코인이나 S코인이 있는지)
+                if (bucket.usedL.has(item.lName) || bucket.usedS.has(item.sName)) continue;
+
+                // 조건 만족 시 삽입
+                bucket.rows.push(item.rowData);
+                bucket.usedL.add(item.lName);
+                bucket.usedS.add(item.sName);
+                placed = true;
+                break;
+            }
+
+            // 넣을 곳이 없으면 새 버킷 생성
+            if (!placed) {
+                const newBucket = {
+                    rows: [item.rowData],
+                    usedL: new Set([item.lName]),
+                    usedS: new Set([item.sName])
+                };
+                buckets.push(newBucket);
+            }
+        }
+
+        log(`총 ${buckets.length}개의 파일로 분할되었습니다. (압축 시작...)`);
 
         // 헤더 정의
         const header = ["GroupName", "Start", "Profit", "Loss", "Restart", "Leverage", "Symbols", "DCA", "PRM"];
 
-        // 분할 처리
-        let fileIndex = 1;
-        for (let i = 0; i < generatedRows.length; i += splitCount) {
-            const chunk = generatedRows.slice(i, i + splitCount);
-            
-            // 워크북 생성
-            const wsData = [header, ...chunk];
+        buckets.forEach((bucket, index) => {
+            const wsData = [header, ...bucket.rows];
             const wb = XLSX.utils.book_new();
             const ws = XLSX.utils.aoa_to_sheet(wsData);
             
-            // I열(PRM)은 1행만 적히고 아래엔 안 적힌다 -> 이미 데이터엔 null로 들어감.
-            // 엑셀 생성 시 null은 빈 칸으로 됨.
-            
+            // 시트 추가
             XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
             
             // Buffer로 변환
             const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
             
             // ZIP에 추가
-            zip.file(`${baseName}_${fileIndex}.xlsx`, excelBuffer);
-            fileIndex++;
-        }
-
-        log(`총 ${fileIndex-1}개의 파일로 분할하여 ZIP 압축 중...`);
+            zip.file(`${baseName}_${index + 1}.xlsx`, excelBuffer);
+        });
 
         // ZIP 다운로드
         zip.generateAsync({type:"blob"})
