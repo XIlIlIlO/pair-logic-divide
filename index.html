@@ -42,8 +42,8 @@
 <body>
 
 <div class="container">
-    <h1>엑셀 로직 생성기</h1>
-    <p>L그룹과 S그룹 엑셀 파일들을 업로드하여 로직을 생성합니다. (파일 내 코인 중복 방지 적용)</p>
+    <h1>엑셀 로직 생성기 (최적화 버전)</h1>
+    <p>L그룹과 S그룹 엑셀 파일들을 업로드하여 로직을 생성합니다. (순환 매칭 알고리즘 적용)</p>
 
     <div class="section">
         <h2>1. 파일 업로드</h2>
@@ -114,7 +114,7 @@
                 <input type="text" id="file-name" value="Result">
             </div>
         </div>
-        <p style="font-size: 0.9em; color: #666;">* 같은 파일 내에 동일 코인(L 또는 S)이 중복되지 않도록 분할하므로, 설정한 개수보다 적게 담길 수 있습니다.</p>
+        <p style="font-size: 0.9em; color: #666;">* 순환 매칭 알고리즘 적용: 코인 개수(N)만큼의 파일이 생성되는 것이 기본이며, 분할 개수를 N보다 크게 설정하면 파일 개수가 최적화(최소화) 됩니다.</p>
         <div style="margin-top: 20px; text-align: center;">
             <button onclick="processFiles()">데이터 처리 및 결과 생성</button>
         </div>
@@ -136,9 +136,9 @@
 <script>
     let lData = [];
     let sData = [];
-    let finalL = []; // 필터링(교집합 여부 등)된 최종 리스트
+    let finalL = []; 
     let finalS = []; 
-    let allCombinations = []; 
+    let fileBuckets = []; // 수정됨: 평면 리스트 대신 완성된 파일 그룹 리스트 사용
     
     document.getElementById('files-l').addEventListener('change', (e) => updateFileList(e.target, 'list-l'));
     document.getElementById('files-s').addEventListener('change', (e) => updateFileList(e.target, 'list-s'));
@@ -158,7 +158,6 @@
         }
     }
 
-    // 코인 기본 이름 추출 (예: BTC+ -> BTC, ETH- -> ETH)
     function getBaseSymbol(name) {
         return name.replace(/[+\-]$/, "").trim().toUpperCase();
     }
@@ -177,25 +176,20 @@
         document.getElementById('download-section').style.display = 'none';
 
         try {
-            // 1. 데이터 파싱 및 통합
             const lMap = await parseAndMergeFiles(lFiles, 'L');
             const sMap = await parseAndMergeFiles(sFiles, 'S');
 
-            // 2. 순이익 양수 필터링
             const rawL = filterPositive(lMap);
             const rawS = filterPositive(sMap);
 
             log(`[기본] 순이익 양수 - L그룹: ${rawL.length}개, S그룹: ${rawS.length}개`);
 
-            // 3. 교집합 필터링 여부 확인
             if (useIntersection) {
                 log("옵션 적용: 교집합 코인만 추출합니다.");
                 
-                // 각 리스트의 베이스 심볼 집합 생성
                 const lSymbols = new Set(rawL.map(item => getBaseSymbol(item.rawName)));
                 const sSymbols = new Set(rawS.map(item => getBaseSymbol(item.rawName)));
                 
-                // 교집합 찾기
                 const intersection = new Set([...lSymbols].filter(x => sSymbols.has(x)));
                 log(`교집합 코인 개수: ${intersection.size}개`);
 
@@ -204,7 +198,6 @@
                     return;
                 }
 
-                // 교집합에 해당하는 항목만 남기기
                 finalL = rawL.filter(item => intersection.has(getBaseSymbol(item.rawName)));
                 finalS = rawS.filter(item => intersection.has(getBaseSymbol(item.rawName)));
             } else {
@@ -212,7 +205,6 @@
                 finalS = rawS;
             }
 
-            // 정렬 (순이익 내림차순)
             finalL.sort((a, b) => b.profit - a.profit);
             finalS.sort((a, b) => b.profit - a.profit);
 
@@ -223,12 +215,16 @@
                 return;
             }
 
-            // 4. 조합 로직 데이터 생성
-            prepareCombinations();
+            // 4. 알고리즘 변경: 순환 매칭 실행
+            runRotationMatching();
+
+            // 총 조합 수 계산 (단순 표시용)
+            let totalRows = 0;
+            fileBuckets.forEach(b => totalRows += b.length);
 
             document.getElementById('result-summary').innerHTML = 
-                `<strong>생성 결과:</strong> 총 ${allCombinations.length}개의 조합 로직 준비됨. ` +
-                `(L: ${finalL.length}개 × S: ${finalS.length}개)`;
+                `<strong>생성 결과:</strong> 총 ${totalRows}개의 로직이 ${fileBuckets.length}개 그룹(라운드)으로 준비됨.<br>` +
+                `(최적화 알고리즘 적용 완료)`;
             document.getElementById('download-section').style.display = 'block';
             log("처리 완료! 다운로드 버튼을 이용하세요.");
 
@@ -241,12 +237,10 @@
 
     async function parseAndMergeFiles(fileList, type) {
         const mergedData = {}; 
-
         for (let file of fileList) {
             log(`${type} 파일 읽는 중: ${file.name}`);
             const data = await readExcelFile(file);
             
-            // 헤더 행 찾기
             let headerRowIndex = -1;
             for(let i=0; i<Math.min(20, data.length); i++) {
                 const rowStr = JSON.stringify(data[i]);
@@ -272,17 +266,13 @@
                 if (c === "순이익" || c === "Net Profit") profitIdx = idx;
             });
 
-            if (nameIdx === -1 || profitIdx === -1) {
-                continue;
-            }
+            if (nameIdx === -1 || profitIdx === -1) continue;
 
             for (let i = headerRowIndex + 1; i < data.length; i++) {
                 const row = data[i];
                 if (!row || row.length <= nameIdx) continue;
-
                 const name = row[nameIdx];
                 const profit = parseFloat(row[profitIdx]);
-
                 if (name && !isNaN(profit)) {
                     const groupName = name.toString().trim();
                     if (!mergedData[groupName]) {
@@ -321,8 +311,10 @@
         return list;
     }
 
-    function prepareCombinations() {
-        allCombinations = [];
+    // ★ 수정된 알고리즘: 순환 매칭 (Rotation Matching) ★
+    function runRotationMatching() {
+        fileBuckets = []; // 초기화
+
         const valB = document.getElementById('val-b').value;
         const valC = document.getElementById('val-c').value;
         const valD = document.getElementById('val-d').value;
@@ -330,40 +322,50 @@
         const valF = document.getElementById('val-f').value;
         const valH = document.getElementById('val-h').value;
 
-        for (let lItem of finalL) {
-            for (let sItem of finalS) {
-                const lName = lItem.rawName; 
-                const sName = sItem.rawName; 
-                
-                const groupNameCol = `${lName} ${sName}`;
-                const lSymbolRaw = lName.replace(/[+\-]$/, "");
-                const sSymbolRaw = sName.replace(/[+\-]$/, "");
-                const symbolsCol = `${lSymbolRaw}USDT,L\n${sSymbolRaw}USDT,S`;
+        // 1. 리스트 길이 맞추기 (더미 추가로 N x N 정사각형 격자 생성)
+        const N = Math.max(finalL.length, finalS.length);
+        const listL = [...finalL];
+        const listS = [...finalS];
 
-                const row = [
-                    groupNameCol, // A
-                    valB,         // B
-                    valC,         // C
-                    valD,         // D
-                    valE,         // E
-                    valF,         // F
-                    symbolsCol,   // G
-                    valH,         // H
-                    null          // I
-                ];
-                
-                allCombinations.push({
-                    lName: lName,
-                    sName: sName,
-                    rowData: row
-                });
+        // 부족한 부분을 null로 채움
+        while(listL.length < N) listL.push(null);
+        while(listS.length < N) listS.push(null);
+
+        // 2. N라운드 진행 (0 ~ N-1)
+        for (let round = 0; round < N; round++) {
+            const currentRoundRows = [];
+
+            for (let i = 0; i < N; i++) {
+                // L은 고정, S는 round만큼 시프트하여 매칭
+                const itemL = listL[i];
+                const itemS = listS[(i + round) % N];
+
+                // 둘 다 실제 데이터일 경우에만 행 생성
+                if (itemL && itemS) {
+                    const lName = itemL.rawName; 
+                    const sName = itemS.rawName; 
+                    
+                    const groupNameCol = `${lName} ${sName}`;
+                    const lSymbolRaw = lName.replace(/[+\-]$/, "");
+                    const sSymbolRaw = sName.replace(/[+\-]$/, "");
+                    const symbolsCol = `${lSymbolRaw}USDT,L\n${sSymbolRaw}USDT,S`;
+
+                    const row = [
+                        groupNameCol, valB, valC, valD, valE, valF, symbolsCol, valH, null
+                    ];
+                    currentRoundRows.push(row);
+                }
+            }
+
+            // 이번 라운드에 생성된 행이 있다면 버킷에 추가
+            // (이 버킷 안에서는 L도 S도 절대 중복되지 않음이 수학적으로 보장됨)
+            if (currentRoundRows.length > 0) {
+                fileBuckets.push(currentRoundRows);
             }
         }
     }
 
-    // 열 너비 설정 헬퍼 함수
     function setColumnWidth(ws) {
-        // A~I열 (9개) 모두 너비 14로 설정
         const wscols = [];
         for(let i=0; i<9; i++) {
             wscols.push({wch: 14});
@@ -385,16 +387,13 @@
 
         const wb = XLSX.utils.book_new();
         const ws = XLSX.utils.aoa_to_sheet(wsData);
-        
-        // 열 너비 설정
-        ws['!cols'] = [{wch: 20}, {wch: 15}]; // 이름은 좀 더 길게, 순이익은 적당히
-
+        ws['!cols'] = [{wch: 20}, {wch: 15}];
         XLSX.utils.book_append_sheet(wb, ws, "Result");
         XLSX.writeFile(wb, `${type}_Group_Filtered_List.xlsx`);
     }
 
     function downloadZippedResults() {
-        if (allCombinations.length === 0) {
+        if (fileBuckets.length === 0) {
             alert("생성된 로직 데이터가 없습니다.");
             return;
         }
@@ -403,54 +402,33 @@
         const baseName = document.getElementById('file-name').value || "Result";
         const zip = new JSZip();
 
-        log(`중복 방지 분할 작업 시작 (최대 ${maxRows}행/파일)...`);
+        log(`파일 생성 및 압축 시작... (최대 행 수: ${maxRows})`);
 
-        let buckets = [];
-
-        // First Fit with Constraints 알고리즘
-        for (let item of allCombinations) {
-            let placed = false;
-            for (let bucket of buckets) {
-                if (bucket.rows.length >= maxRows) continue;
-                if (bucket.usedL.has(item.lName) || bucket.usedS.has(item.sName)) continue;
-
-                bucket.rows.push(item.rowData);
-                bucket.usedL.add(item.lName);
-                bucket.usedS.add(item.sName);
-                placed = true;
-                break;
-            }
-
-            if (!placed) {
-                const newBucket = {
-                    rows: [item.rowData],
-                    usedL: new Set([item.lName]),
-                    usedS: new Set([item.sName])
-                };
-                buckets.push(newBucket);
-            }
-        }
-
-        log(`총 ${buckets.length}개의 파일로 분할되었습니다. (압축 시작...)`);
-
+        let fileIndex = 1;
         const header = ["GroupName", "Start", "Profit", "Loss", "Restart", "Leverage", "Symbols", "DCA", "PRM"];
 
-        buckets.forEach((bucket, index) => {
-            const wsData = [header, ...bucket.rows];
-            const wb = XLSX.utils.book_new();
-            const ws = XLSX.utils.aoa_to_sheet(wsData);
-            
-            // 열 너비 설정 (모든 열 14)
-            setColumnWidth(ws);
+        // 수정된 다운로드 로직: 이미 만들어진 fileBuckets(라운드)를 순회
+        // 각 라운드는 이미 중복이 없음. 만약 라운드의 크기가 maxRows보다 크다면 쪼개서 저장.
+        fileBuckets.forEach((bucketRows) => {
+            for (let i = 0; i < bucketRows.length; i += maxRows) {
+                const chunk = bucketRows.slice(i, i + maxRows);
+                
+                const wsData = [header, ...chunk];
+                const wb = XLSX.utils.book_new();
+                const ws = XLSX.utils.aoa_to_sheet(wsData);
+                
+                setColumnWidth(ws);
 
-            XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-            const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-            zip.file(`${baseName}_${index + 1}.xlsx`, excelBuffer);
+                XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+                const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+                zip.file(`${baseName}_${fileIndex}.xlsx`, excelBuffer);
+                fileIndex++;
+            }
         });
 
         zip.generateAsync({type:"blob"})
         .then(function(content) {
-            saveAs(content, `${baseName}_Split_Files.zip`);
+            saveAs(content, `${baseName}_Optimized_Files.zip`);
             log("다운로드 완료.");
         });
     }
