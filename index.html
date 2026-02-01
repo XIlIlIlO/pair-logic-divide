@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>엑셀 로직 생성기 (S & L Group)</title>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; line-height: 1.6; color: #333; }
+        h1, h2, h3 { color: #2c3e50; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        
+        .section { background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd; }
+        .upload-area { display: flex; gap: 20px; margin-bottom: 20px; }
+        .upload-box { flex: 1; padding: 20px; border: 2px dashed #bbb; border-radius: 5px; text-align: center; background: #fff; }
+        .upload-box.dragover { border-color: #3498db; background: #eaf6ff; }
+        
+        .input-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .input-group { display: flex; flex-direction: column; }
+        .input-group label { margin-bottom: 5px; font-weight: bold; font-size: 0.9em; }
+        .input-group input, .input-group textarea { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        .input-group textarea { height: 80px; resize: vertical; }
+
+        button { background-color: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; transition: background 0.3s; }
+        button:hover { background-color: #2980b9; }
+        button:disabled { background-color: #95a5a6; cursor: not-allowed; }
+        
+        .btn-green { background-color: #27ae60; }
+        .btn-green:hover { background-color: #219150; }
+
+        #logArea { margin-top: 20px; padding: 10px; background: #333; color: #eee; border-radius: 5px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.9em; }
+        
+        .download-section { display: none; margin-top: 20px; padding: 20px; background-color: #e8f6f3; border: 1px solid #a2d9ce; border-radius: 8px; }
+        .file-list { margin-top: 10px; font-size: 0.9em; color: #555; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>엑셀 로직 생성기</h1>
+    <p>L그룹과 S그룹 엑셀 파일들을 업로드하여 로직을 생성하고 분할 다운로드합니다.</p>
+
+    <div class="section">
+        <h2>1. 파일 업로드</h2>
+        <div class="upload-area">
+            <div class="upload-box" id="drop-l">
+                <h3>L 그룹 파일들 (여러개 가능)</h3>
+                <input type="file" id="files-l" multiple accept=".xlsx, .csv">
+                <div class="file-list" id="list-l">선택된 파일 없음</div>
+            </div>
+            <div class="upload-box" id="drop-s">
+                <h3>S 그룹 파일들 (여러개 가능)</h3>
+                <input type="file" id="files-s" multiple accept=".xlsx, .csv">
+                <div class="file-list" id="list-s">선택된 파일 없음</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>2. 로직 설정값 입력</h2>
+        <div class="input-grid">
+            <div class="input-group">
+                <label for="val-b">B열: Start</label>
+                <input type="text" id="val-b" value="10">
+            </div>
+            <div class="input-group">
+                <label for="val-c">C열: Profit</label>
+                <input type="text" id="val-c" value="11">
+            </div>
+            <div class="input-group">
+                <label for="val-d">D열: Loss</label>
+                <input type="text" id="val-d" value="393.5">
+            </div>
+            <div class="input-group">
+                <label for="val-e">E열: Restart</label>
+                <input type="text" id="val-e" value="-1">
+            </div>
+            <div class="input-group">
+                <label for="val-f">F열: Leverage</label>
+                <input type="text" id="val-f" value="20">
+            </div>
+            <div class="input-group" style="grid-column: span 2;">
+                <label for="val-h">H열: DCA (줄바꿈 가능)</label>
+                <textarea id="val-h">10,15,15
+10,20,30
+10,20,30</textarea>
+            </div>
+        </div>
+        <hr>
+        <div class="input-grid">
+            <div class="input-group">
+                <label for="split-count">파일 분할 개수 (행 단위)</label>
+                <input type="number" id="split-count" value="40" min="1">
+            </div>
+            <div class="input-group">
+                <label for="file-name">다운로드 파일명 접두사</label>
+                <input type="text" id="file-name" value="Result">
+            </div>
+        </div>
+        <div style="margin-top: 20px; text-align: center;">
+            <button onclick="processFiles()">데이터 처리 및 결과 생성</button>
+        </div>
+    </div>
+
+    <div id="download-section" class="download-section">
+        <h2>3. 결과 다운로드</h2>
+        <p id="result-summary"></p>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button class="btn-green" onclick="downloadIndividualList('L')">L 그룹 양수 리스트 다운로드</button>
+            <button class="btn-green" onclick="downloadIndividualList('S')">S 그룹 양수 리스트 다운로드</button>
+            <button onclick="downloadZippedResults()">분할된 로직 파일(ZIP) 다운로드</button>
+        </div>
+    </div>
+
+    <div id="logArea">준비 완료.</div>
+</div>
+
+<script>
+    let lData = [];
+    let sData = [];
+    let generatedRows = []; // 최종 생성된 모든 행 데이터
+    
+    // 파일 입력 이벤트 리스너
+    document.getElementById('files-l').addEventListener('change', (e) => updateFileList(e.target, 'list-l'));
+    document.getElementById('files-s').addEventListener('change', (e) => updateFileList(e.target, 'list-s'));
+
+    function log(msg) {
+        const area = document.getElementById('logArea');
+        area.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+        area.scrollTop = area.scrollHeight;
+    }
+
+    function updateFileList(input, displayId) {
+        const display = document.getElementById(displayId);
+        if (input.files.length > 0) {
+            display.textContent = `${input.files.length}개 파일 선택됨: ` + Array.from(input.files).map(f => f.name).join(', ');
+        } else {
+            display.textContent = "선택된 파일 없음";
+        }
+    }
+
+    async function processFiles() {
+        const lFiles = document.getElementById('files-l').files;
+        const sFiles = document.getElementById('files-s').files;
+
+        if (lFiles.length === 0 || sFiles.length === 0) {
+            alert("L 그룹과 S 그룹 파일을 모두 업로드해주세요.");
+            return;
+        }
+
+        log("파일 처리를 시작합니다...");
+        document.getElementById('download-section').style.display = 'none';
+
+        try {
+            // 1. 데이터 파싱 및 통합
+            const lMap = await parseAndMergeFiles(lFiles, 'L');
+            const sMap = await parseAndMergeFiles(sFiles, 'S');
+
+            // 2. 순이익 양수 필터링 및 정렬
+            lData = filterAndSort(lMap);
+            sData = filterAndSort(sMap);
+
+            log(`L 그룹 유효(양수) 코인 수: ${lData.length}개`);
+            log(`S 그룹 유효(양수) 코인 수: ${sData.length}개`);
+
+            if (lData.length === 0 || sData.length === 0) {
+                alert("처리할 유효한 데이터(순이익 양수)가 없습니다.");
+                return;
+            }
+
+            // 3. 조합 로직 생성
+            generateLogicRows();
+
+            document.getElementById('result-summary').innerHTML = 
+                `<strong>생성 결과:</strong> 총 ${generatedRows.length}개의 조합 로직 생성됨. ` +
+                `(L: ${lData.length}개 × S: ${sData.length}개)`;
+            document.getElementById('download-section').style.display = 'block';
+            log("처리 완료! 다운로드 버튼을 이용하세요.");
+
+        } catch (err) {
+            console.error(err);
+            log("에러 발생: " + err.message);
+            alert("처리 중 오류가 발생했습니다. 로그를 확인하세요.");
+        }
+    }
+
+    async function parseAndMergeFiles(fileList, type) {
+        const mergedData = {}; // { "GroupName": { profit: 0, count: 0, rawName: "" } }
+
+        for (let file of fileList) {
+            log(`${type} 파일 읽는 중: ${file.name}`);
+            const data = await readExcelFile(file);
+            
+            // 헤더 행 찾기 ('Group Name'이 있는 행)
+            let headerRowIndex = -1;
+            for(let i=0; i<Math.min(20, data.length); i++) {
+                // 첫번째 컬럼 혹은 다른 컬럼에서 Group Name 확인
+                const rowStr = JSON.stringify(data[i]);
+                if (rowStr.includes("Group Name")) {
+                    headerRowIndex = i;
+                    break;
+                }
+            }
+
+            if (headerRowIndex === -1) {
+                log(`[주의] ${file.name}에서 'Group Name' 헤더를 찾을 수 없습니다. 건너뜁니다.`);
+                continue;
+            }
+
+            // 컬럼 인덱스 찾기
+            const headerRow = data[headerRowIndex];
+            let nameIdx = -1;
+            let profitIdx = -1;
+
+            // 헤더 배열을 순회하며 인덱스 찾기
+            // 보통 headerRow는 배열이거나 객체일 수 있음 (SheetJS 옵션에 따라 다름, 여기선 header:1로 읽어 배열임)
+            headerRow.forEach((cell, idx) => {
+                if (!cell) return;
+                const c = cell.toString().trim();
+                if (c === "Group Name") nameIdx = idx;
+                if (c === "순이익" || c === "Net Profit") profitIdx = idx;
+            });
+
+            if (nameIdx === -1 || profitIdx === -1) {
+                log(`[주의] ${file.name}에서 필요한 컬럼(Group Name, 순이익)을 찾을 수 없습니다.`);
+                continue;
+            }
+
+            // 데이터 집계
+            for (let i = headerRowIndex + 1; i < data.length; i++) {
+                const row = data[i];
+                if (!row || row.length <= nameIdx) continue;
+
+                const name = row[nameIdx];
+                const profit = parseFloat(row[profitIdx]);
+
+                if (name && !isNaN(profit)) {
+                    const groupName = name.toString().trim();
+                    if (!mergedData[groupName]) {
+                        mergedData[groupName] = { profit: 0, rawName: groupName };
+                    }
+                    mergedData[groupName].profit += profit;
+                }
+            }
+        }
+        return mergedData;
+    }
+
+    function readExcelFile(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                // 2차원 배열로 변환
+                const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                resolve(json);
+            };
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    function filterAndSort(dataMap) {
+        const list = [];
+        for (const key in dataMap) {
+            if (dataMap[key].profit > 0) {
+                list.push(dataMap[key]);
+            }
+        }
+        // 순이익 내림차순 정렬
+        list.sort((a, b) => b.profit - a.profit);
+        return list;
+    }
+
+    function generateLogicRows() {
+        generatedRows = [];
+        const valB = document.getElementById('val-b').value;
+        const valC = document.getElementById('val-c').value;
+        const valD = document.getElementById('val-d').value;
+        const valE = document.getElementById('val-e').value;
+        const valF = document.getElementById('val-f').value;
+        const valH = document.getElementById('val-h').value;
+
+        // 헤더
+        const header = ["GroupName", "Start", "Profit", "Loss", "Restart", "Leverage", "Symbols", "DCA", "PRM"];
+        
+        // 데이터 생성
+        for (let lItem of lData) {
+            for (let sItem of sData) {
+                const lName = lItem.rawName; // e.g., "XRP+"
+                const sName = sItem.rawName; // e.g., "ADA-"
+                
+                // A열: L코인명+ S코인명- (공백으로 연결)
+                const groupNameCol = `${lName} ${sName}`;
+
+                // G열 심볼 추출: 접미사(+, -) 제거
+                // 보통 L그룹은 +, S그룹은 - 로 끝나므로 마지막 글자 제거 시도
+                const lSymbolRaw = lName.replace(/[+\-]$/, "");
+                const sSymbolRaw = sName.replace(/[+\-]$/, "");
+                
+                // G열 포맷: "COINUSDT,L\nCOINUSDT,S"
+                const symbolsCol = `${lSymbolRaw}USDT,L\n${sSymbolRaw}USDT,S`;
+
+                // 행 데이터 구성
+                // I열(PRM)은 데이터 행에는 없음 (샘플 기준)
+                const row = [
+                    groupNameCol, // A
+                    valB,         // B
+                    valC,         // C
+                    valD,         // D
+                    valE,         // E
+                    valF,         // F
+                    symbolsCol,   // G
+                    valH,         // H
+                    null          // I (데이터 없음)
+                ];
+                generatedRows.push(row);
+            }
+        }
+    }
+
+    function downloadIndividualList(type) {
+        const data = type === 'L' ? lData : sData;
+        if (!data || data.length === 0) {
+            alert("다운로드할 데이터가 없습니다.");
+            return;
+        }
+
+        const wsData = [["Group Name", "Total Net Profit"]];
+        data.forEach(item => {
+            wsData.push([item.rawName, item.profit]);
+        });
+
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        XLSX.utils.book_append_sheet(wb, ws, "Result");
+        XLSX.writeFile(wb, `${type}_Group_Positive_List.xlsx`);
+    }
+
+    function downloadZippedResults() {
+        if (generatedRows.length === 0) {
+            alert("생성된 로직 데이터가 없습니다.");
+            return;
+        }
+
+        const splitCount = parseInt(document.getElementById('split-count').value) || 40;
+        const baseName = document.getElementById('file-name').value || "Result";
+        const zip = new JSZip();
+
+        // 헤더 정의
+        const header = ["GroupName", "Start", "Profit", "Loss", "Restart", "Leverage", "Symbols", "DCA", "PRM"];
+
+        // 분할 처리
+        let fileIndex = 1;
+        for (let i = 0; i < generatedRows.length; i += splitCount) {
+            const chunk = generatedRows.slice(i, i + splitCount);
+            
+            // 워크북 생성
+            const wsData = [header, ...chunk];
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet(wsData);
+            
+            // I열(PRM)은 1행만 적히고 아래엔 안 적힌다 -> 이미 데이터엔 null로 들어감.
+            // 엑셀 생성 시 null은 빈 칸으로 됨.
+            
+            XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+            
+            // Buffer로 변환
+            const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+            
+            // ZIP에 추가
+            zip.file(`${baseName}_${fileIndex}.xlsx`, excelBuffer);
+            fileIndex++;
+        }
+
+        log(`총 ${fileIndex-1}개의 파일로 분할하여 ZIP 압축 중...`);
+
+        // ZIP 다운로드
+        zip.generateAsync({type:"blob"})
+        .then(function(content) {
+            saveAs(content, `${baseName}_Split_Files.zip`);
+            log("다운로드 완료.");
+        });
+    }
+</script>
+
+</body>
+</html>
